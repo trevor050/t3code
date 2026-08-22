@@ -32,7 +32,6 @@ import {
   buildBooleanOptionDescriptor,
   buildSelectOptionDescriptor,
   buildServerProvider,
-  DEFAULT_TIMEOUT_MS,
   isCommandMissingCause,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -804,6 +803,16 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   return yield* spawnAndCollect(claudeSettings.binaryPath, command);
 });
 
+// `claude --version` is not a cheap command. The native installer ships Claude
+// Code as a single ~310MB executable, so a cold start pays to fault the binary
+// in and validate its signature before it prints anything. Nothing keeps it
+// resident between health checks, so under everyday memory pressure every
+// refresh pays that cost: measured on an 8GB M1 running a normal desktop
+// session (Claude Code 2.1.239, native installer), 1.3-1.4s standalone and
+// 1.0-2.9s spawned from the server. The previous 4s budget sat close enough to
+// that to lose the race regularly, on a machine under no unusual load.
+const VERSION_PROBE_TIMEOUT_MS = 15_000;
+
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
   claudeSettings: ClaudeSettings,
   resolveCapabilities?: (
@@ -844,7 +853,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     claudeSettings,
     ["--version"],
     resolvedEnvironment,
-  ).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
+  ).pipe(Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(versionProbe)) {
     const error = versionProbe.failure;
